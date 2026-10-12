@@ -63,8 +63,8 @@ def user_actions(user, items):
 
 
 def main():
-    users = {"nisse": "apa", "stina": "t-rex", "bosse": "ko"}
-    data = {"nisse": ["luva", "vante"], "stina": [], "bosse": ["gräs", "mjölk"]}
+    users = {"victor": "bamse", "axel": "bamse"}
+    data = {"victor": [], "axel": []}
 
     option = menu("Welcome to Lagra (TM)", "Option: ", {"l": "Log in", "q": "Quit"})
     while option != "q":
