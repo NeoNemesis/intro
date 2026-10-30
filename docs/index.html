@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Spela Yatzy i en terminal i webbläsaren: skriv python yatzy.py.">
+<title>Yatzy Terminal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;600&family=Fira+Sans:wght@400;600&display=swap">
+<style>
+/* Layout: a single terminal window filling the screen — title bar, scrolling output, a row of quick keys at the bottom. Committed dark look (a terminal), both host themes. */
+:root {
+  --page: #0B1520;
+  --win: #101E2C;
+  --bar: #172A3E;
+  --text: #E3EAF2;
+  --dim: #8399B0;
+  --prompt: #6FD39A;
+  --accent: #5B9BFF;
+  --key: #1D3550;
+  --key-line: #2C4C70;
+  --red: #FF6B63;
+  --amber: #F2C14E;
+  --mono: "Fira Code", ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
+  --ui: "Fira Sans", "Segoe UI", system-ui, sans-serif;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+html { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+body {
+  background: var(--page); color: var(--text); font-family: var(--ui);
+  padding-block: 0;
+  max-width: 100%; overflow-x: hidden;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.shell { height: 100%; max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 10px; padding-block: 12px; }
+
+.window { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--win); border: 1px solid var(--key-line); border-radius: 12px; overflow: hidden; }
+.titlebar { display: flex; align-items: center; gap: 8px; padding: 9px 12px; background: var(--bar); border-bottom: 1px solid var(--key-line); }
+.lights { display: flex; gap: 6px; }
+.lights i { width: 11px; height: 11px; border-radius: 50%; background: var(--key-line); }
+.lights i:nth-child(1) { background: var(--red); } .lights i:nth-child(2) { background: var(--amber); } .lights i:nth-child(3) { background: var(--prompt); }
+.titlebar span { flex: 1; text-align: center; font-family: var(--mono); font-size: 12px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* 56 monospace columns (the dice row is 55) must fit the phone width without wrapping */
+.screen {
+  flex: 1; min-height: 0; overflow: auto; padding: 12px;
+  font-family: var(--mono); font-size: clamp(9px, calc((100vw - 64px) / 34), 15px); line-height: 1.45;
+  white-space: normal; cursor: text; -webkit-overflow-scrolling: touch;
+}
+.out { margin: 0; font: inherit; white-space: pre; }
+.out .p { color: var(--prompt); }
+.out .cmd { color: var(--text); }
+.out .info { color: var(--dim); }
+.out .err { color: var(--red); }
+.line { display: flex; align-items: baseline; }
+.line .pr { white-space: pre; flex: none; }
+.line .pr.sh { color: var(--prompt); }
+#cmd {
+  flex: 1; min-width: 4ch; background: transparent; border: 0; outline: 0; padding: 0; margin: 0;
+  color: var(--text); font: inherit; caret-color: var(--accent);
+}
+
+.keys { display: flex; gap: 8px; flex-wrap: wrap; padding-bottom: env(safe-area-inset-bottom, 0px); }
+.keys button {
+  font-family: var(--mono); font-size: 14px; color: var(--text); background: var(--key);
+  border: 1px solid var(--key-line); border-radius: 9px; min-height: 42px; padding: 0 14px; cursor: pointer;
+}
+.keys button.go { background: var(--accent); border-color: var(--accent); color: #0B1520; font-weight: 600; }
+.keys button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+#cmd:focus-visible { outline: none; }
+.note { font-size: 12px; color: var(--dim); text-align: center; margin: 0; }
+.note a { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<div class="shell">
+  <div class="window">
+    <div class="titlebar"><div class="lights" aria-hidden="true"><i></i><i></i><i></i></div><span>intro/yatzy — terminal</span><div style="width:45px"></div></div>
+    <div class="screen" id="screen" aria-live="polite">
+      <pre class="out" id="out"></pre>
+      <label class="line" for="cmd"><span class="pr" id="pr"></span><input id="cmd" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="send" aria-label="Terminal input"></label>
+    </div>
+  </div>
+  <div class="keys" id="keys"></div>
+  <p class="note">Runs a JavaScript copy of <code>yatzy.py</code>, <code>terminal_view.py</code>, <code>game.py</code> and <code>scoring.py</code> from <a href="https://github.com/NeoNemesis/intro" target="_blank" rel="noopener">NeoNemesis/intro</a>, with the same rules and the same output.</p>
+</div>
+
+<script>
+// LOGIC START — a line-for-line port of yatzy/scoring.py and yatzy/game.py
+const NUM_DICE = 5, MAX_ROLLS = 3, MIN_PLAYERS = 1, MAX_PLAYERS = 6;
+const CATEGORIES = [
+  ["ettor", "Ettor"], ["tvaor", "Tvåor"], ["treor", "Treor"], ["fyror", "Fyror"], ["femmor", "Femmor"], ["sexor", "Sexor"],
+  ["ett_par", "Ett par"], ["tva_par", "Två par"], ["tretal", "Tretal"], ["fyrtal", "Fyrtal"],
+  ["liten_stege", "Liten stege"], ["stor_stege", "Stor stege"], ["kak", "Kåk"], ["chans", "Chans"], ["yatzy", "Yatzy"],
+];
+const UPPER = ["ettor", "tvaor", "treor", "fyror", "femmor", "sexor"];
+const BONUS_LIMIT = 63, BONUS_POINTS = 50, YATZY_POINTS = 50;
+
+function categoryName(category) {
+  for (const [key, name] of CATEGORIES) if (key === category) return name;
+  throw new Error("Okänd kategori: " + category);
+}
+function counter(values) { const c = new Map(); for (const v of values) c.set(v, (c.get(v) || 0) + 1); return c; }
+function facesWithAtLeast(counts, n) { return [...counts].filter(([, c]) => c >= n).map(([f]) => f); }
+const sorted = a => [...a].sort((x, y) => x - y);
+const same = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+const sum = a => a.reduce((s, v) => s + v, 0);
+
+function score(category, values) {
+  const counts = counter(values);
+  if (UPPER.includes(category)) { const face = UPPER.indexOf(category) + 1; return face * (counts.get(face) || 0); }
+  if (category === "ett_par") { const p = facesWithAtLeast(counts, 2); return p.length ? 2 * Math.max(...p) : 0; }
+  if (category === "tva_par") { const p = facesWithAtLeast(counts, 2); return p.length === 2 ? 2 * sum(p) : 0; }
+  if (category === "tretal") { const t = facesWithAtLeast(counts, 3); return t.length ? 3 * t[0] : 0; }
+  if (category === "fyrtal") { const q = facesWithAtLeast(counts, 4); return q.length ? 4 * q[0] : 0; }
+  if (category === "liten_stege") return same(sorted(values), [1, 2, 3, 4, 5]) ? 15 : 0;
+  if (category === "stor_stege") return same(sorted(values), [2, 3, 4, 5, 6]) ? 20 : 0;
+  if (category === "kak") return same(sorted([...counts.values()]), [2, 3]) ? sum(values) : 0;
+  if (category === "chans") return sum(values);
+  if (category === "yatzy") return counts.size === 1 ? YATZY_POINTS : 0;
+  throw new Error("Okänd kategori: " + category);
+}
+
+class Dice {
+  constructor(randint) { this.randint = randint || ((a, b) => a + Math.floor(Math.random() * (b - a + 1))); this.values = Array(NUM_DICE).fill(1); this.held = Array(NUM_DICE).fill(false); }
+  roll() { for (let i = 0; i < NUM_DICE; i++) if (!this.held[i]) this.values[i] = this.randint(1, 6); }
+  holdOnly(positions) { this.held = [...Array(NUM_DICE).keys()].map(i => positions.includes(i)); }
+  toggle(i) { this.held[i] = !this.held[i]; }
+  releaseAll() { this.held = Array(NUM_DICE).fill(false); }
+}
+class Player {
+  constructor(name) { this.name = name; this.scores = {}; }
+  hasUsed(c) { return c in this.scores; }
+  upperSum() { return UPPER.reduce((s, k) => s + (this.scores[k] || 0), 0); }
+  bonus() { return this.upperSum() >= BONUS_LIMIT ? BONUS_POINTS : 0; }
+  total() { return sum(Object.values(this.scores)) + this.bonus(); }
+  isDone() { return Object.keys(this.scores).length === CATEGORIES.length; }
+}
+class Game {
+  constructor(names, randint) {
+    if (!(names.length >= MIN_PLAYERS && names.length <= MAX_PLAYERS)) throw new Error(`Antal spelare måste vara ${MIN_PLAYERS}-${MAX_PLAYERS}`);
+    this.players = names.map(n => new Player(n)); this.dice = new Dice(randint); this.current = 0; this.rollsLeft = MAX_ROLLS;
+  }
+  currentPlayer() { return this.players[this.current]; }
+  hasRolled() { return this.rollsLeft < MAX_ROLLS; }
+  canRoll() { return this.rollsLeft > 0 && !this.isOver(); }
+  roll() { if (!this.canRoll()) throw new Error("Inga slag kvar"); if (!this.hasRolled()) this.dice.releaseAll(); this.dice.roll(); this.rollsLeft -= 1; }
+  availableCategories() { const p = this.currentPlayer(); return CATEGORIES.map(c => c[0]).filter(k => !p.hasUsed(k)); }
+  preview(c) { return score(c, this.dice.values); }
+  choose(c) {
+    if (!this.hasRolled()) throw new Error("Du måste slå minst en gång först");
+    if (!this.availableCategories().includes(c)) throw new Error("Kategorin är redan använd");
+    const points = this.preview(c); this.currentPlayer().scores[c] = points; this.nextTurn(); return points;
+  }
+  nextTurn() { this.current = (this.current + 1) % this.players.length; this.rollsLeft = MAX_ROLLS; this.dice.releaseAll(); }
+  isOver() { return this.players.every(p => p.isDone()); }
+  winners() { const best = Math.max(...this.players.map(p => p.total())); return this.players.filter(p => p.total() === best); }
+}
+// LOGIC END
+
+// PROGRAM START — a line-for-line port of yatzy/terminal_view.py and yatzy/yatzy.py.
+// io.print(text) writes one line; io.input(prompt) resolves with what the player typed.
+const PIPS = {
+  1: ["       ", "   o   ", "       "], 2: [" o     ", "       ", "     o "], 3: [" o     ", "   o   ", "     o "],
+  4: [" o   o ", "       ", " o   o "], 5: [" o   o ", "   o   ", " o   o "], 6: [" o   o ", " o   o ", " o   o "],
+};
+const NAME_WIDTH = 8;
+const ljust = (s, n) => String(s).padEnd(n), rjust = (s, n) => String(s).padStart(n);
+const isdigit = s => /^[0-9]+$/.test(s);
+const rstrip = s => s.replace(/\s+$/, "");
+
+function diceLines(values, held) {
+  const lines = ["", "", "", "", "", "", ""];
+  for (let i = 0; i < values.length; i++) {
+    const pips = PIPS[values[i]];
+    lines[0] += "+-------+  "; lines[1] += `|${pips[0]}|  `; lines[2] += `|${pips[1]}|  `; lines[3] += `|${pips[2]}|  `;
+    lines[4] += "+-------+  "; lines[5] += `    ${i + 1}      `; lines[6] += held[i] ? " SPARAD    " : "           ";
+  }
+  return lines;
+}
+function showDice(io, dice) { io.print(); for (const line of diceLines(dice.values, dice.held)) io.print(rstrip(line)); }
+function printSumRow(io, label, values) { let row = ljust(label, 14); for (const v of values) row += rjust(String(v), NAME_WIDTH + 1); io.print(row); }
+function showScorecard(io, game) {
+  const names = game.players.map(p => [...p.name].slice(0, NAME_WIDTH).join(""));
+  const header = ljust("", 14) + names.map(n => rjust(n, NAME_WIDTH + 1)).join("");
+  io.print(); io.print(header); io.print("-".repeat(header.length));
+  for (const [key, name] of CATEGORIES) {
+    let row = ljust(name, 14);
+    for (const p of game.players) { const v = p.scores[key]; row += rjust(v === undefined ? "-" : String(v), NAME_WIDTH + 1); }
+    io.print(row);
+    if (key === UPPER[UPPER.length - 1]) {
+      printSumRow(io, "Summa", game.players.map(p => p.upperSum()));
+      printSumRow(io, "Bonus", game.players.map(p => p.bonus()));
+      io.print("-".repeat(header.length));
+    }
+  }
+  io.print("-".repeat(header.length));
+  printSumRow(io, "Totalt", game.players.map(p => p.total()));
+}
+async function askPlayers(io) {
+  let answer;
+  while (true) {
+    answer = (await io.input(`Hur många spelare? (${MIN_PLAYERS}-${MAX_PLAYERS}): `)).trim();
+    if (isdigit(answer) && MIN_PLAYERS <= +answer && +answer <= MAX_PLAYERS) break;
+    io.print(`Skriv ett tal mellan ${MIN_PLAYERS} och ${MAX_PLAYERS}.`);
+  }
+  const names = [];
+  for (let i = 0; i < +answer; i++) {
+    let name = (await io.input(`Namn på spelare ${i + 1}: `)).trim();
+    if (name === "") name = `Spelare ${i + 1}`;
+    names.push(name);
+  }
+  return names;
+}
+function parsePositions(answer) {
+  const positions = [];
+  for (const ch of answer.replaceAll(",", " ").replaceAll(" ", "")) {
+    if (!isdigit(ch) || !(1 <= +ch && +ch <= NUM_DICE)) return null;
+    positions.push(+ch - 1);
+  }
+  return positions;
+}
+async function askKeepOrScore(io, game) {
+  while (true) {
+    io.print(); io.print(`Slag kvar: ${game.rollsLeft}`);
+    io.print("Skriv numren på tärningarna du vill spara (t.ex. 135)");
+    io.print("Enter = slå om alla, p = sätt poäng, v = visa protokollet");
+    const answer = (await io.input("> ")).trim().toLowerCase();
+    if (answer === "p") return "score";
+    if (answer === "v") { showScorecard(io, game); showDice(io, game.dice); continue; }
+    const positions = parsePositions(answer);
+    if (positions === null) { io.print(`Ogiltigt val. Använd siffrorna 1-${NUM_DICE}.`); continue; }
+    game.dice.holdOnly(positions);
+    return "roll";
+  }
+}
+async function askCategory(io, game) {
+  const available = game.availableCategories();
+  io.print(); io.print("Välj var du vill sätta poängen:");
+  available.forEach((key, i) => io.print(`  ${rjust(i + 1, 2)}. ${ljust(categoryName(key), 12)} ${rjust(game.preview(key), 3)} p`));
+  while (true) {
+    const answer = (await io.input("> ")).trim();
+    if (isdigit(answer) && 1 <= +answer && +answer <= available.length) return available[+answer - 1];
+    io.print(`Skriv ett tal mellan 1 och ${available.length}.`);
+  }
+}
+async function playTurn(io, game) {
+  const player = game.currentPlayer();
+  io.print(); io.print("=".repeat(40)); io.print(`${player.name}s tur`); io.print("=".repeat(40));
+  await io.input("Tryck enter för att slå tärningarna...");
+  game.roll(); showDice(io, game.dice);
+  while (game.canRoll()) {
+    if ((await askKeepOrScore(io, game)) === "score") break;
+    game.roll(); showDice(io, game.dice);
+  }
+  const category = await askCategory(io, game);
+  const points = game.choose(category);
+  io.print(`${player.name} fick ${points} p på ${categoryName(category)}.`);
+}
+function showResult(io, game) {
+  showScorecard(io, game); io.print();
+  const winners = game.winners();
+  if (winners.length === 1) io.print(`${winners[0].name} vann med ${winners[0].total()} poäng!`);
+  else io.print(`Oavgjort mellan ${winners.map(p => p.name).join(" och ")} med ${winners[0].total()} poäng!`);
+}
+function splash(io) {
+  io.print(); io.print("--------------------------------"); io.print("Yatzy"); io.print();
+  io.print(`för ${MIN_PLAYERS}-${MAX_PLAYERS} spelare`); io.print("--------------------------------"); io.print();
+}
+async function run(io, randint) {
+  splash(io);
+  const game = new Game(await askPlayers(io), randint);
+  while (!game.isOver()) {
+    await playTurn(io, game);
+    if (game.current === 0 && !game.isOver()) showScorecard(io, game);
+  }
+  showResult(io, game);
+}
+class KeyboardInterrupt extends Error {}
+async function main(io, randint) {           // yatzy.py
+  try { await run(io, randint); }
+  catch (e) { if (e instanceof KeyboardInterrupt) { io.print(); io.print("Spelet avbröts."); } else throw e; }
+}
+// PROGRAM END
+
+// ---------- The terminal itself ----------
+const out = document.getElementById("out"), cmd = document.getElementById("cmd"), pr = document.getElementById("pr");
+const screen = document.getElementById("screen"), keys = document.getElementById("keys");
+const SHELL_PROMPT = "~/intro/yatzy $ ";
+let waiting = null;          // resolver for the program's current input()
+let running = false;
+const history = []; let histPos = 0;
+
+function write(text, cls) {
+  const span = document.createElement("span"); if (cls) span.className = cls; span.textContent = text; out.appendChild(span);
+}
+function scrollDown() { requestAnimationFrame(() => { screen.scrollTop = screen.scrollHeight; }); }
+const io = {
+  print(text = "") { write(text + "\n"); scrollDown(); },
+  input(prompt) {
+    return new Promise((resolve, reject) => { waiting = { resolve, reject, prompt }; setPrompt(prompt, false); renderKeys(); });
+  },
+};
+function setPrompt(text, shell) { pr.textContent = text; pr.className = "pr" + (shell ? " sh" : ""); scrollDown(); }
+
+function renderKeys() {
+  keys.innerHTML = "";
+  const add = (label, action, go) => {
+    const b = document.createElement("button"); b.type = "button"; b.textContent = label; if (go) b.className = "go";
+    b.addEventListener("click", () => { action(); if (!matchMedia("(pointer: coarse)").matches) cmd.focus(); });
+    keys.appendChild(b);
+  };
+  if (!running) { add("python yatzy.py", () => submit("python yatzy.py"), true); add("ls", () => submit("ls")); add("clear", () => submit("clear")); return; }
+  const p = waiting ? waiting.prompt : "";
+  add("Enter ⏎", () => submit(cmd.value), true);
+  if (p === "> " ) { add("p", () => submit("p")); add("v", () => submit("v")); }
+  add("Ctrl+C", interrupt);
+}
+
+function submit(text) {
+  cmd.value = "";
+  if (running && waiting) {
+    write(waiting.prompt); write(text + "\n", "cmd");
+    const w = waiting; waiting = null; setPrompt("", false); w.resolve(text); return;
+  }
+  if (!running) shell(text);
+}
+function interrupt() {
+  if (running && waiting) { write(waiting.prompt); write("^C\n", "cmd"); const w = waiting; waiting = null; w.reject(new KeyboardInterrupt()); }
+  else { write(SHELL_PROMPT, "p"); write(cmd.value + "^C\n", "cmd"); cmd.value = ""; scrollDown(); }
+}
+
+async function shell(line) {
+  write(SHELL_PROMPT, "p"); write(line + "\n", "cmd");
+  const c = line.trim(); if (c) { history.push(c); histPos = history.length; }
+  const parts = c.split(/\s+/);
+  if (!c) {}
+  else if (/^(python3?|py)$/.test(parts[0]) && parts[1] === "yatzy.py") return startGame();
+  else if (/yatzy\.py/.test(c) && /^py/.test(c)) io.print("Did you mean: python yatzy.py  (with a space after python)");
+  else if (c === "ls" || c === "dir") io.print("game.py  scoring.py  terminal_view.py  test_yatzy.py  yatzy.py");
+  else if (c === "clear" || c === "cls") { out.textContent = ""; }
+  else if (c === "help") io.print("Type python yatzy.py to start the game. Other commands: ls, clear.");
+  else if (/^(python3?|py)\b/.test(c)) io.print("This terminal can only run yatzy.py. Try: python yatzy.py");
+  else io.print(`${parts[0]}: command not found. Try: python yatzy.py`);
+  setPrompt(SHELL_PROMPT, true); renderKeys();
+}
+async function startGame() {
+  running = true; setPrompt("", false); renderKeys();
+  try { await main(io); } catch (e) { io.print(String(e)); }
+  running = false; waiting = null; setPrompt(SHELL_PROMPT, true); renderKeys();
+}
+
+cmd.addEventListener("keydown", e => {
+  if (e.key === "Enter") { e.preventDefault(); submit(cmd.value); }
+  else if (e.key === "c" && e.ctrlKey) { e.preventDefault(); interrupt(); }
+  else if (!running && e.key === "ArrowUp" && histPos > 0) { e.preventDefault(); cmd.value = history[--histPos]; }
+  else if (!running && e.key === "ArrowDown") { e.preventDefault(); histPos = Math.min(history.length, histPos + 1); cmd.value = history[histPos] || ""; }
+});
+screen.addEventListener("click", () => { if (!getSelection().toString()) cmd.focus({ preventScroll: true }); });
+
+write("Welcome to the Yatzy terminal.\n", "info");
+write("Type  python yatzy.py  and press Enter to start the game.\n\n", "info");
+setPrompt(SHELL_PROMPT, true); renderKeys();
+</script>
+
+</body>
+</html>
